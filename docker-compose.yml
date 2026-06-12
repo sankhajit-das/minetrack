@@ -27,5 +27,16 @@ services:
     volumes:
       - ./backend:/app
 
+  simulator:
+    build: ./backend
+    command: python run_sim.py
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend:/app
+
 volumes:
   pgdata:

@@ -55,7 +55,7 @@ ON CONFLICT DO NOTHING;
 -- seed: 4 sensors (one per type) 
 INSERT INTO sensors (zone_id, sensor_code, type, unit, warn_threshold, crit_threshold) 
 VALUES 
-    (3, 'GAS-01', 'methane', '%', 1.5, 2.5), 
+    (3, 'GAS-01', 'methane', '%', 0.1, 2.5), 
     (2, 'TMP-01', 'temp', 'celsius', 30.0, 35.0), 
     (3, 'VIB-01', 'vibration', 'mm/s', 5.0, 8.0), 
     (2, 'CO-01', 'co', 'ppm', 50.0, 100.0) 
