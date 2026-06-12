@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from app.db.database import run_schema, close_pool
 from app.api.ws_routes import router as ws_router
 from app.api.ws_routes import broadcast_sensor_data, listen_for_alerts
+from app.api.routes import router as api_router # Added REST router import
 
 logging.basicConfig(level=logging.INFO)
 
@@ -45,8 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Attach our real-time websocket node interface endpoints
+# Include Routers
 app.include_router(ws_router)
+app.include_router(api_router) # Added REST router endpoints directly
 
 @app.get("/")
 async def root():
@@ -67,3 +69,16 @@ async def health():
         "alerts": alerts,
         "ws_clients": len(manager.active)
     }
+
+# Allow your local React frontend application on port 5173 to bridge connection routes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include Routers cleanly
+app.include_router(ws_router)
+app.include_router(api_router)  # This mounts /sensors, /alerts, etc. directly at the root level
