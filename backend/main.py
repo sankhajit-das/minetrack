@@ -1,21 +1,52 @@
+import asyncio
+import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.db.database import run_schema, close_pool
-from app.alerts.alert_engine import get_redis, close_redis
+from app.api.ws_routes import router as ws_router
+from app.api.ws_routes import broadcast_sensor_data, listen_for_alerts
+
+logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Setup connection pools and schema for the web server
+    # 1. Warm up database schemas and connection configurations
     await run_schema()
-    await get_redis()
-    print("Web API Gateway ready.")
+    print("DB schema ready")
+    
+    # 2. Start the WebSocket broadcaster and Redis listener loops inside the Web Gateway
+    app.state.tasks = [
+        asyncio.create_task(broadcast_sensor_data()),
+        asyncio.create_task(listen_for_alerts()),
+    ]
+    print("WebSocket telemetry broadcaster + Redis alert listener running.")
     
     yield
     
+    # 3. Clean architecture shutdown sequence
+    print("Shutting down background tasks cleanly...")
+    for task in app.state.tasks:
+        task.cancel()
+        
+    # Let tasks gracefully clear system loop bindings
+    await asyncio.gather(*app.state.tasks, return_exceptions=True)
     await close_pool()
-    await close_redis()
+    print("All system connections flushed.")
 
 app = FastAPI(title="MineTrack API", lifespan=lifespan)
+
+# Allow your local React frontend application on port 5173 to bridge connection routes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Attach our real-time websocket node interface endpoints
+app.include_router(ws_router)
 
 @app.get("/")
 async def root():
@@ -26,13 +57,13 @@ async def health():
     from app.db.database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
-        sensors = await conn.fetchval("SELECT COUNT(*) FROM sensors")
         readings = await conn.fetchval("SELECT COUNT(*) FROM readings")
         alerts = await conn.fetchval("SELECT COUNT(*) FROM alerts")
         
+    from app.api.ws_manager import manager
     return {
         "status": "ok",
-        "sensors_in_db": sensors,
-        "readings_in_db": readings,
-        "alerts_in_db": alerts
+        "readings": readings,
+        "alerts": alerts,
+        "ws_clients": len(manager.active)
     }
