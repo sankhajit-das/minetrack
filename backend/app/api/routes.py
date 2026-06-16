@@ -131,6 +131,43 @@ async def list_alerts(
             """, limit)
         return [dict(r) for r in rows]
 
+# ── GET /zones ────────────────────────────────────────────
+@router.get("/zones")
+async def list_zones():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT z.id, z.name, z.level,
+                   COUNT(s.id) AS sensor_count
+            FROM zones z
+            LEFT JOIN sensors s ON s.zone_id = z.id
+            GROUP BY z.id, z.name, z.level
+            ORDER BY z.level
+        """)
+    return [dict(r) for r in rows]
+
+# ── GET /zones/{zone_id}/sensors ──────────────────────────
+@router.get("/zones/{zone_id}/sensors")
+async def zone_sensors(zone_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        zone = await conn.fetchval(
+            "SELECT id FROM zones WHERE id = $1", zone_id
+        )
+        if not zone:
+            raise HTTPException(status_code=404, detail=f"Zone {zone_id} not found")
+    
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT s.id, s.sensor_code, s.type, s.unit,
+                   s.warn_threshold, s.crit_threshold
+            FROM sensors s
+            WHERE s.zone_id = $1
+            ORDER BY s.id
+        """, zone_id)
+    return [dict(r) for r in rows]
+
+    
 # ── POST /sensors/{id}/threshold ───────────────────────
 class ThresholdUpdate(BaseModel):
     warn_threshold: float
