@@ -4,51 +4,38 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.db.database import run_schema, close_pool
-from app.api.ws_routes import router as ws_router
-from app.api.ws_routes import broadcast_sensor_data, listen_for_alerts
-from app.api.routes import router as api_router # Added REST router import
+from app.simulator.simulator import run_simulator
+from app.api.ws_routes import router as ws_router, broadcast_sensor_data, listen_for_alerts
+from app.api.routes import router as api_router
 
 logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Warm up database schemas and connection configurations
     await run_schema()
     print("DB schema ready")
-    
-    # 2. Start the WebSocket broadcaster and Redis listener loops inside the Web Gateway
-    app.state.tasks = [
+    tasks = [
+        asyncio.create_task(run_simulator()),
         asyncio.create_task(broadcast_sensor_data()),
         asyncio.create_task(listen_for_alerts()),
     ]
-    print("WebSocket telemetry broadcaster + Redis alert listener running.")
-    
+    print("Simulator + WebSocket broadcaster + alert listener running")
     yield
-    
-    # 3. Clean architecture shutdown sequence
-    print("Shutting down background tasks cleanly...")
-    for task in app.state.tasks:
-        task.cancel()
-        
-    # Let tasks gracefully clear system loop bindings
-    await asyncio.gather(*app.state.tasks, return_exceptions=True)
+    for t in tasks:
+        t.cancel()
     await close_pool()
-    print("All system connections flushed.")
 
 app = FastAPI(title="MineTrack API", lifespan=lifespan)
 
-# Allow your local React frontend application on port 5173 to bridge connection routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include Routers
 app.include_router(ws_router)
-app.include_router(api_router) # Added REST router endpoints directly
+app.include_router(api_router)
 
 @app.get("/")
 async def root():
@@ -57,28 +44,9 @@ async def root():
 @app.get("/health")
 async def health():
     from app.db.database import get_pool
+    from app.api.ws_manager import manager
     pool = await get_pool()
     async with pool.acquire() as conn:
         readings = await conn.fetchval("SELECT COUNT(*) FROM readings")
         alerts = await conn.fetchval("SELECT COUNT(*) FROM alerts")
-        
-    from app.api.ws_manager import manager
-    return {
-        "status": "ok",
-        "readings": readings,
-        "alerts": alerts,
-        "ws_clients": len(manager.active)
-    }
-
-# Allow your local React frontend application on port 5173 to bridge connection routes
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include Routers cleanly
-app.include_router(ws_router)
-app.include_router(api_router)  # This mounts /sensors, /alerts, etc. directly at the root level
+    return {"status": "ok", "readings": readings, "alerts": alerts, "ws_clients": len(manager.active)}
