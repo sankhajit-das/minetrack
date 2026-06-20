@@ -21,18 +21,26 @@ function zoneClass(s) {
   return "zone-card zone-normal"
 }
 function timeAgo(iso) {
-  if (!iso) return "unknown"
+  if (!iso) return "—"
   const diff = Math.floor((Date.now() - new Date(iso)) / 1000)
   if (diff < 60) return diff + "s ago"
   if (diff < 3600) return Math.floor(diff / 60) + "m ago"
   return Math.floor(diff / 3600) + "h ago"
 }
+function fmtSeconds(s) {
+  if (s === null || s === undefined) return "—"
+  return s + "s"
+}
 
 export default function App() {
   const [sensors, setSensors] = useState([])
   const [alerts, setAlerts] = useState([])
+  const [incidents, setIncidents] = useState([])
   const [history, setHistory] = useState({})
   const [wsStatus, setWsStatus] = useState("connecting")
+  const [ventilating, setVentilating] = useState({})
+  const [clickedInject, setClickedInject] = useState({})
+  const [clickedVent, setClickedVent] = useState({})
   const wsRef = useRef(null)
 
   useEffect(function() {
@@ -40,6 +48,19 @@ export default function App() {
       .then(function(r) { if (r.ok) return r.json() })
       .then(function(data) { if (data) setAlerts(data) })
       .catch(function() {})
+  }, [])
+
+  function refreshIncidents() {
+    fetch(API_URL + "/incidents?limit=15")
+      .then(function(r) { if (r.ok) return r.json() })
+      .then(function(data) { if (data) setIncidents(data) })
+      .catch(function() {})
+  }
+
+  useEffect(function() {
+    refreshIncidents()
+    const interval = setInterval(refreshIncidents, 4000)
+    return function() { clearInterval(interval) }
   }, [])
 
   useEffect(function() {
@@ -78,8 +99,71 @@ export default function App() {
     return function() { if (wsRef.current) wsRef.current.close() }
   }, [])
 
+  useEffect(function() {
+    const interval = setInterval(function() {
+      setVentilating(function(prev) {
+        const next = {}
+        Object.keys(prev).forEach(function(id) {
+          const remaining = prev[id] - 1
+          if (remaining > 0) next[id] = remaining
+        })
+        return next
+      })
+    }, 1000)
+    return function() { clearInterval(interval) }
+  }, [])
+
+  function injectScenario(sensorId, value) {
+    setClickedInject(function(prev) {
+      const next = Object.assign({}, prev)
+      next[sensorId] = true
+      return next
+    })
+    setTimeout(function() {
+      setClickedInject(function(prev) {
+        const next = Object.assign({}, prev)
+        delete next[sensorId]
+        return next
+      })
+    }, 600)
+    fetch(API_URL + "/sensors/" + sensorId + "/inject?value=" + value, { method: "POST" })
+      .catch(function() {})
+  }
+
+  function activateVentilation(sensorId) {
+    setClickedVent(function(prev) {
+      const next = Object.assign({}, prev)
+      next[sensorId] = true
+      return next
+    })
+    fetch(API_URL + "/sensors/" + sensorId + "/ventilate", { method: "POST" })
+      .then(function(r) { return r.json() })
+      .then(function(data) {
+        setVentilating(function(prev) {
+          const next = Object.assign({}, prev)
+          next[sensorId] = data.duration_seconds || 20
+          return next
+        })
+      })
+      .catch(function() {})
+  }
+
+  const criticalSensors = sensors.filter(function(s) { return s.status === "critical" })
+  const hasEmergency = criticalSensors.length > 0
+
   return (
     <div>
+      {hasEmergency && (
+        <div className="emergency-banner">
+          <div>
+            <div className="emergency-text">⚠ EMERGENCY — {criticalSensors.length} sensor(s) at critical level</div>
+            <div className="emergency-sub">
+              {criticalSensors.map(function(s) { return s.sensor_code }).join(", ")} — immediate action required
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="topbar">
         <span className="topbar-title">⛏ MineTrack Matrix Operations</span>
         <div className="live-badge">
@@ -87,22 +171,64 @@ export default function App() {
           <span>{wsStatus === "live" ? "Live · " + sensors.length + " Nodes Active" : "Status: " + wsStatus}</span>
         </div>
       </div>
+
       <div className="main">
+
         <div className="stat-grid">
           {sensors.map(function(s) {
+            const isVentilating = ventilating[s.sensor_id] > 0
+            const needsAction = s.status === "warning" || s.status === "critical"
+            const cardClass = "stat-card" + (s.status === "critical" ? " is-critical" : s.status === "warning" ? " is-warning" : "")
+            const wasJustClicked = clickedVent[s.sensor_id]
             return (
-              <div key={s.sensor_id} className="stat-card">
+              <div key={s.sensor_id} className={cardClass}>
                 <div className="stat-label">{s.type} Telemetry · {s.zone}</div>
                 <div className={"stat-value " + statusColor(s.status)}>
                   {s.value.toFixed(2)} <span style={{ fontSize: "13px", color: "#94a3b8" }}>{s.unit}</span>
                   <span className={badgeClass(s.status)}>{s.status}</span>
                 </div>
                 <div className="stat-meta">{s.sensor_code} · warn {s.warn_threshold} · crit {s.crit_threshold}</div>
+
+                {isVentilating && (
+                  <div className="vent-active-text">
+                    <div className="vent-spinner" />
+                    Ventilation active — {ventilating[s.sensor_id]}s remaining
+                  </div>
+                )}
+
+                {!isVentilating && needsAction && (
+                  <button
+                    onClick={function() { activateVentilation(s.sensor_id) }}
+                    className={"vent-btn" + (wasJustClicked ? " just-clicked" : "")}
+                  >
+                    {wasJustClicked ? "✓ Ventilation requested..." : "💨 Activate ventilation"}
+                  </button>
+                )}
               </div>
             )
           })}
         </div>
+
+        <div className="panel" style={{marginBottom: "20px"}}>
+          <div className="panel-title">Scenario injector — simulate an incident</div>
+          <div style={{display: "flex", gap: "8px", flexWrap: "wrap"}}>
+            {sensors.map(function(s) {
+              const wasClicked = clickedInject[s.sensor_id]
+              return (
+                <button
+                  key={s.sensor_id}
+                  onClick={function() { injectScenario(s.sensor_id, s.crit_threshold * 1.4) }}
+                  className={"inject-btn" + (wasClicked ? " just-clicked" : "")}
+                >
+                  {wasClicked ? "⚡ Injecting..." : "Trigger " + s.sensor_code + " critical"}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         <div className="grid2">
+
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {sensors.map(function(s) {
               return (
@@ -125,11 +251,13 @@ export default function App() {
               )
             })}
           </div>
+
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+
             <div className="panel">
               <div className="panel-title">Recent System Alerts</div>
               {alerts.length === 0 && <div className="no-alerts">No telemetry anomalies detected</div>}
-              {alerts.slice(0, 8).map(function(a, i) {
+              {alerts.slice(0, 6).map(function(a, i) {
                 return (
                   <div key={i} className="alert-row">
                     <div className={"alert-dot alert-dot-" + (a.severity || "normal")} />
@@ -139,6 +267,7 @@ export default function App() {
                 )
               })}
             </div>
+
             <div className="panel">
               <div className="panel-title">Hardware Infrastructure Matrix</div>
               <div className="zone-grid">
@@ -152,8 +281,50 @@ export default function App() {
                 })}
               </div>
             </div>
+
           </div>
         </div>
+
+        <div className="panel" style={{marginTop: "4px"}}>
+          <div className="panel-title">Operator response log — incident history</div>
+          {incidents.length === 0 && <div className="no-alerts">No incidents recorded yet — trigger a scenario to see one here</div>}
+          {incidents.length > 0 && (
+            <table className="incident-table">
+              <thead>
+                <tr>
+                  <th>Sensor</th>
+                  <th>Breach value</th>
+                  <th>Peak value</th>
+                  <th>Breach time</th>
+                  <th>Response time</th>
+                  <th>Recovery time</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incidents.map(function(inc) {
+                  const statusClass = inc.status === "resolved" ? "incident-resolved"
+                    : inc.status === "ventilating" ? "incident-ventilating"
+                    : "incident-open"
+                  const responseClass = inc.response_seconds !== null && inc.response_seconds <= 10 ? "metric-good" : "metric-slow"
+                  const recoveryClass = inc.recovery_seconds !== null && inc.recovery_seconds <= 20 ? "metric-good" : "metric-slow"
+                  return (
+                    <tr key={inc.id}>
+                      <td>{inc.sensor_code}</td>
+                      <td>{inc.breach_value.toFixed(2)} {inc.unit}</td>
+                      <td>{inc.peak_value.toFixed(2)} {inc.unit}</td>
+                      <td>{timeAgo(inc.breach_at)}</td>
+                      <td className={inc.response_seconds !== null ? responseClass : ""}>{fmtSeconds(inc.response_seconds)}</td>
+                      <td className={inc.recovery_seconds !== null ? recoveryClass : ""}>{fmtSeconds(inc.recovery_seconds)}</td>
+                      <td><span className={"incident-status " + statusClass}>{inc.status}</span></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
       </div>
     </div>
   )
