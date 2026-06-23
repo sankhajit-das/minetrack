@@ -78,6 +78,18 @@ async def run_schema():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS incidents (
+                id SERIAL PRIMARY KEY,
+                sensor_id INT NOT NULL REFERENCES sensors(sensor_id),
+                breach_value FLOAT NOT NULL,
+                breach_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ventilation_at TIMESTAMPTZ,
+                resolved_at TIMESTAMPTZ,
+                peak_value FLOAT NOT NULL
+            );
+        """)
+
+        await conn.execute("""
             INSERT INTO zones (name, level) VALUES
                 ('Main Entry', 1),
                 ('Shaft A',    2),

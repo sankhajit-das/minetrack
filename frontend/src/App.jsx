@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react"
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
 import "./index.css"
+import SensorDetail from "./SensorDetail"
+import MineMap from "./MineMap"
 
 const API_URL = "http://127.0.0.1:8000"
 const WS_URL = "ws://127.0.0.1:8000/ws"
@@ -41,6 +43,7 @@ export default function App() {
   const [ventilating, setVentilating] = useState({})
   const [clickedInject, setClickedInject] = useState({})
   const [clickedVent, setClickedVent] = useState({})
+  const [selectedSensor, setSelectedSensor] = useState(null)
   const wsRef = useRef(null)
 
   useEffect(function() {
@@ -165,10 +168,10 @@ export default function App() {
       )}
 
       <div className="topbar">
-        <span className="topbar-title">⛏ MineTrack Matrix Operations</span>
+        <span className="topbar-title"><i className="topbar-icon">⛏</i>MineTrack — Matrix Operations</span>
         <div className="live-badge">
           <div className="live-dot" />
-          <span>{wsStatus === "live" ? "Live · " + sensors.length + " Nodes Active" : "Status: " + wsStatus}</span>
+          <span>{wsStatus === "live" ? "LIVE · " + sensors.length + " NODES" : wsStatus.toUpperCase()}</span>
         </div>
       </div>
 
@@ -178,13 +181,13 @@ export default function App() {
           {sensors.map(function(s) {
             const isVentilating = ventilating[s.sensor_id] > 0
             const needsAction = s.status === "warning" || s.status === "critical"
-            const cardClass = "stat-card" + (s.status === "critical" ? " is-critical" : s.status === "warning" ? " is-warning" : "")
+            const cardClass = "stat-card" + (s.status === "critical" ? " is-critical" : s.status === "warning" ? " is-warning" : " is-normal")
             const wasJustClicked = clickedVent[s.sensor_id]
             return (
-              <div key={s.sensor_id} className={cardClass}>
+              <div key={s.sensor_id} className={cardClass} onClick={function() { setSelectedSensor(s) }} style={{cursor: "pointer"}}>
                 <div className="stat-label">{s.type} Telemetry · {s.zone}</div>
                 <div className={"stat-value " + statusColor(s.status)}>
-                  {s.value.toFixed(2)} <span style={{ fontSize: "13px", color: "#94a3b8" }}>{s.unit}</span>
+                  {s.value.toFixed(2)}<span className="stat-unit">{s.unit}</span>
                   <span className={badgeClass(s.status)}>{s.status}</span>
                 </div>
                 <div className="stat-meta">{s.sensor_code} · warn {s.warn_threshold} · crit {s.crit_threshold}</div>
@@ -198,7 +201,7 @@ export default function App() {
 
                 {!isVentilating && needsAction && (
                   <button
-                    onClick={function() { activateVentilation(s.sensor_id) }}
+                    onClick={function(e) { e.stopPropagation(); activateVentilation(s.sensor_id) }}
                     className={"vent-btn" + (wasJustClicked ? " just-clicked" : "")}
                   >
                     {wasJustClicked ? "✓ Ventilation requested..." : "💨 Activate ventilation"}
@@ -207,6 +210,11 @@ export default function App() {
               </div>
             )
           })}
+        </div>
+
+        <div className="panel" style={{marginBottom: "20px"}}>
+          <div className="panel-title">Mine layout — live view</div>
+          <MineMap sensors={sensors} />
         </div>
 
         <div className="panel" style={{marginBottom: "20px"}}>
@@ -326,6 +334,8 @@ export default function App() {
         </div>
 
       </div>
+
+      <SensorDetail sensor={selectedSensor} onClose={function() { setSelectedSensor(null) }} />
     </div>
   )
 }
